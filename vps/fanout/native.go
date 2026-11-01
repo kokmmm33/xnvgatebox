@@ -123,7 +123,11 @@ func (n *Native) InboundDetail(id int, publicHost string) (*InboundDetail, error
 			id = c.Password
 		}
 		detail.Clients = append(detail.Clients, ClientInfo{Email: c.Email, ID: id, Enable: c.Enable})
-		detail.Links = append(detail.Links, shareLink(ib, c, publicHost))
+		if ib.CDN != nil {
+			detail.Links = append(detail.Links, cdnLinksForClient(ib, c)...)
+		} else {
+			detail.Links = append(detail.Links, shareLink(ib, c, publicHost))
+		}
 	}
 	return detail, nil
 }
@@ -145,7 +149,11 @@ func (n *Native) InboundLinks(ids []int, publicHost string) ([]string, error) {
 			if !c.Enable {
 				continue
 			}
-			out = append(out, shareLink(ib, c, publicHost))
+			if ib.CDN != nil {
+				out = append(out, cdnLinksForClient(ib, c)...)
+			} else {
+				out = append(out, shareLink(ib, c, publicHost))
+			}
 		}
 	}
 	return out, nil
@@ -243,7 +251,7 @@ func (n *Native) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunne
 	if tpl == nil {
 		return nil, fmt.Errorf("模板入站 %d 不存在", templateID)
 	}
-	if tpl.ThirdParty != nil {
+	if tpl.ThirdParty != nil || tpl.CDN != nil {
 		return nil, fmt.Errorf("第三方代理请在代理资源中管理")
 	}
 
@@ -351,6 +359,9 @@ func (n *Native) UpdateInbound(id int, patch InboundPatch, tunnels []*Tunnel) er
 	}
 
 	if patch.Port != nil && *patch.Port != ib.Port {
+		if ib.CDN != nil {
+			return fmt.Errorf("CDN 节点端口请在 CDN 管理页面修改并重新检测候选")
+		}
 		port := *patch.Port
 		if port < 1 || port > 65535 {
 			return fmt.Errorf("端口 %d 不在合法范围", port)

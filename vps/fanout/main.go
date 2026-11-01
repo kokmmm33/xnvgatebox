@@ -183,6 +183,7 @@ func main() {
 	mux.HandleFunc("/api/xui/links", apiXUILinks)
 	mux.HandleFunc("/api/xui/delete", apiXUIDelete(mgr))
 	mux.HandleFunc("/api/panel/inbound/new", apiInboundCreate(mgr))
+	mux.HandleFunc("/api/cdn", apiCDN(mgr))
 	mux.HandleFunc("/api/panel/inbound/update", apiInboundUpdate(mgr))
 	mux.HandleFunc("/api/panel/client/add", apiClientAdd(mgr))
 	mux.HandleFunc("/api/panel/client/del", apiClientDelete(mgr))
