@@ -129,6 +129,10 @@ func subLinksSources(m *Manager, host string, boundOnly bool, selected map[int]b
 	if _, native := p.(*Native); native && boundOnly {
 		var links []string
 		names := map[string]bool{}
+		cdnIDs := map[int]bool{}
+		for _, rec := range p.(*Native).CDNRecords() {
+			cdnIDs[rec.ID] = true
+		}
 		view := m.ExitsOf()
 		sort.Slice(view.HostDirect, func(i, j int) bool { return view.HostDirect[i].ID < view.HostDirect[j].ID })
 		if includeDirect {
@@ -145,7 +149,11 @@ func subLinksSources(m *Manager, host string, boundOnly bool, selected map[int]b
 					if err != nil {
 						return nil, err
 					}
-					u.Fragment = uniqueRemark("VPS 本机直出", names)
+					label := "VPS 本机直出"
+					if cdnIDs[ib.ID] {
+						label = u.Fragment
+					}
+					u.Fragment = uniqueRemark(label, names)
 					u.RawFragment = ""
 					names[u.Fragment] = true
 					links = append(links, u.String())
@@ -319,17 +327,24 @@ func handleSub(m *Manager) http.HandlerFunc {
 			return
 		}
 
-		body:=[]byte(encodeSub(links,target))
-		if target=="clash" {
-			body,err=renderClash(links)
-			if err!=nil {http.Error(w,err.Error(),400);return}
-			w.Header().Set("Content-Type","application/yaml; charset=utf-8")
-		} else {w.Header().Set("Content-Type", "text/plain; charset=utf-8")}
+		body := []byte(encodeSub(links, target))
+		if target == "clash" {
+			body, err = renderClash(links)
+			if err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
+		} else {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		}
 		w.Header().Set("Cache-Control", "no-store")
 		// 客户端据此决定多久自动拉一次；出口增删之外的变化不影响链接，12 小时够
 		w.Header().Set("Profile-Update-Interval", "12")
 		w.Header().Set("Content-Disposition", "inline; filename=fanout")
-		if target=="clash" {w.Header().Set("Content-Disposition","inline; filename=xnvgatebox-clash.yaml")}
+		if target == "clash" {
+			w.Header().Set("Content-Disposition", "inline; filename=xnvgatebox-clash.yaml")
+		}
 		_, _ = w.Write(body)
 	}
 }

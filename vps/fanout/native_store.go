@@ -47,6 +47,7 @@ type nativeInbound struct {
 	ManagedSlot bool             `json:"managed_slot,omitempty"`
 	Manual      bool             `json:"manual,omitempty"`
 	HostDirect  bool             `json:"host_direct,omitempty"` // only explicit direct entries may use the host
+	CDN         *cdnConfig       `json:"cdn,omitempty"`         // explicit Cloudflare CDN origin
 	SocksSlot   int              `json:"socks_slot,omitempty"`  // managed external SOCKS entry, separate from loopback
 	ThirdParty  *ThirdPartyProxy `json:"third_party,omitempty"`
 }
@@ -142,6 +143,11 @@ func validateNativeStore(st *nativeStore) error {
 		}
 		if ib.HostDirect && (ib.BoundSlot != 0 || ib.BoundTo != "" || ib.SocksSlot != 0) {
 			return fmt.Errorf("本机直出不能同时绑定 VPN Gate")
+		}
+		if ib.CDN != nil {
+			if err := validateCDNInbound(ib); err != nil {
+				return err
+			}
 		}
 		if ib.ThirdParty != nil {
 			if ib.HostDirect || ib.BoundSlot != 0 || ib.BoundTo != "" || ib.SocksSlot != 0 || ib.Protocol != "vless" || ib.securityOrNone() != "reality" {

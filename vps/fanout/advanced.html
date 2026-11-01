@@ -806,6 +806,16 @@
         ><button id="rollbackNative">恢复上次配置</button>
       </div>
       <div id="nativeConnections" hidden></div>
+      <section id="cdnManagement" class="panel" hidden style="margin:24px 0;padding:22px;border:1px solid var(--line);border-radius:16px">
+        <div class="tools" style="margin-bottom:16px;gap:8px;flex-wrap:wrap">
+          <h2>Cloudflare CDN 节点管理</h2><span class="spacer"></span>
+          <button id="cdnExportLinks">明文导出</button><button id="cdnExportBase64">Base64 导出</button>
+          <button id="cdnExportMihomo">Mihomo 导出</button>
+          <button class="primary" id="cdnCreateBtn">＋ 新建 CDN 节点</button>
+        </div>
+        <p class="hint">仅支持内置 Xray：VLESS + WS/HTTPUpgrade + TLS。优选地址需通过 Cloudflare IP、可信 TLS 和 Upgrade 检查后才可导出；检测通过不代表端到端 VLESS 已验证。</p>
+        <div id="cdnList" aria-live="polite"></div>
+      </section>
       <div id="list"><div class="empty">正在读取连接…</div></div>
       <div id="orphans"></div>
       <p class="footnote">
@@ -1166,6 +1176,28 @@
       </div>
     </dialog>
 
+    <dialog class="modal" id="cdnEditor">
+      <form class="sheet" id="cdnForm" style="max-width:740px">
+        <div class="head"><h2 id="cdnEditorTitle">新建 CDN 节点</h2><span class="spacer"></span><button type="button" class="icon" data-close="cdnEditor" aria-label="关闭">×</button></div>
+        <div class="body" style="max-height:65vh;overflow:auto">
+          <input type="hidden" id="cdnEditId" />
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+            <label>备注<input id="cdnRemark" placeholder="Cloudflare CDN" maxlength="120" /></label>
+            <label>CDN 域名<input id="cdnDomain" placeholder="cdn.example.com" required /></label>
+            <label>源站监听端口（新建留空随机）<input id="cdnPort" type="number" min="1" max="65535" placeholder="随机" /></label>
+            <label>Cloudflare HTTPS 边缘端口<select id="cdnEdgePort"><option>443</option><option>2053</option><option>2083</option><option>2087</option><option>2096</option><option>8443</option></select></label>
+            <label>传输<select id="cdnTransport"><option value="ws">WebSocket</option><option value="httpupgrade">HTTPUpgrade</option></select></label>
+            <label>请求路径<input id="cdnPath" value="/cdn" required /></label>
+            <label>源站 TLS 证书绝对路径<input id="cdnCert" placeholder="/etc/ssl/cdn/fullchain.pem" required /></label>
+            <label>源站 TLS 私钥绝对路径<input id="cdnKey" placeholder="/etc/ssl/cdn/privkey.pem" required /></label>
+          </div>
+          <label style="display:block;margin-top:14px">优选 IP / 域名（每行一个，最多 64 条）<textarea id="cdnAddresses" rows="5" style="width:100%" placeholder="104.16.0.1&#10;edge.example.net"></textarea></label>
+          <label style="display:block;margin:12px 0"><input type="checkbox" id="cdnEnabled" checked /> 启用入站</label>
+          <p class="hint">Cloudflare DNS 需开启代理并配置可回源的 HTTPS 端口。修改任何配置将清除以前的检测通过状态。</p>
+        </div>
+        <div class="foot"><span class="spacer"></span><button type="button" data-close="cdnEditor">取消</button><button class="primary" type="submit" id="cdnSubmit">保存节点</button></div>
+      </form>
+    </dialog>
     <div class="toast" id="toast"></div>
 
     <script>
@@ -1443,6 +1475,124 @@
           "</details>";
       }
 
+      let cdnRecords = [];
+      async function loadCDNRecords() {
+        const box = $('#cdnManagement');
+        box.hidden = !isNative();
+        if (!isNative()) return;
+        try {
+          cdnRecords = (await api('/api/cdn')) || [];
+          renderCDNRecords();
+        } catch (err) {
+          $('#cdnList').textContent = 'CDN 节点读取失败：' + err.message;
+        }
+      }
+      function renderCDNRecords() {
+        const box = $('#cdnList');
+        if (!cdnRecords.length) {
+          box.innerHTML = '<div class="empty">暂无 CDN 节点。创建后添加候选地址并执行检测。</div>';
+          return;
+        }
+        box.innerHTML = cdnRecords.map(r => {
+          const entries = r.entries || [];
+          const verified = entries.filter(e => e.verified).length;
+          const list = entries.map(e => '<div style="margin:4px 0;overflow-wrap:anywhere">' +
+            (e.verified ? '✅' : e.checked_at ? '❌' : '⏳') + ' ' + esc(e.address) +
+            (e.error ? '<small> · ' + esc(e.error) + '</small>' : '') + '</div>').join('');
+          return '<article style="border-top:1px solid var(--line);padding:16px 0">' +
+            '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
+            '<strong>' + esc(r.remark || r.domain) + '</strong><small>' + esc(r.domain) + ' · ' +
+            esc(r.transport) + ' · 源站端口 ' + r.port + ' → CDN ' + r.edge_port +
+            ' · ' + (r.enable ? '已启用' : '已停用') + ' · 已验证 ' + verified + '/' + entries.length + '</small>' +
+            '<span class="spacer"></span>' +
+            '<button data-cdn-edit="' + r.id + '">编辑</button>' +
+            '<button data-cdn-check="' + r.id + '">检查候选</button>' +
+            '<button data-entry-toggle="' + r.id + '" data-enabled="' + (r.enable ? '1' : '0') + '">' + (r.enable ? '停用' : '启用') + '</button>' +
+            '<button data-cdn-delete="' + r.id + '" class="danger">删除</button>' +
+            '</div><details style="margin-top:10px"><summary>候选地址（' + entries.length + '）与链接（' + (r.links || []).length + '）</summary>' +
+            (list || '<p class="hint">还没有候选地址</p>') +
+            (r.links || []).map(link => '<div style="display:flex;gap:6px;align-items:center;margin:5px 0"><code style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">' + esc(decodeURIComponent(link.split('#')[1] || 'VLESS')) + '</code><button data-cdn-copy="' + esc(link) + '">复制链接</button></div>').join('') +
+            '</details></article>';
+        }).join('');
+      }
+      function editCDN(record) {
+        $('#cdnEditId').value = record ? record.id : '';
+        $('#cdnEditorTitle').textContent = record ? '编辑 CDN 节点' : '新建 CDN 节点';
+        $('#cdnRemark').value = record?.remark || '';
+        $('#cdnDomain').value = record?.domain || '';
+        $('#cdnPort').value = record?.port || '';
+        $('#cdnPort').readOnly = !!record;
+        $('#cdnEdgePort').value = record?.edge_port || '443';
+        $('#cdnTransport').value = record?.transport || 'ws';
+        $('#cdnPath').value = record?.path || '/cdn';
+        $('#cdnCert').value = record?.cert_file || '';
+        $('#cdnKey').value = record?.key_file || '';
+        $('#cdnAddresses').value = (record?.entries || []).map(e => e.address).join('\n');
+        $('#cdnEnabled').checked = record ? !!record.enable : true;
+        openModal('cdnEditor');
+      }
+      $('#cdnCreateBtn').onclick = () => editCDN(null);
+      $('#cdnForm').addEventListener('submit', async e => {
+        e.preventDefault();
+        const b = $('#cdnSubmit'); b.disabled = true;
+        const id = Number($('#cdnEditId').value);
+        const payload = {
+          action: id ? 'update' : 'create', id,
+          domain: $('#cdnDomain').value.trim(),
+          port: Number($('#cdnPort').value) || 0,
+          edge_port: Number($('#cdnEdgePort').value),
+          transport: $('#cdnTransport').value, path: $('#cdnPath').value.trim(),
+          cert_file: $('#cdnCert').value.trim(), key_file: $('#cdnKey').value.trim(),
+          remark: $('#cdnRemark').value.trim(), enable: $('#cdnEnabled').checked,
+          addresses: $('#cdnAddresses').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean),
+        };
+        try {
+          await api('/api/cdn', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+          $('#cdnEditor').close();
+          toast('CDN 节点已保存，候选需重新检测');
+          await poll();
+        } catch (err) { toast(err.message, true); }
+        finally { b.disabled = false; }
+      });
+      document.addEventListener('click', async e => {
+        const b = e.target.closest('[data-cdn-edit],[data-cdn-check],[data-cdn-delete],[data-cdn-copy]');
+        if (!b) return;
+        if (b.dataset.cdnCopy) {
+          try { await navigator.clipboard.writeText(b.dataset.cdnCopy); toast('链接已复制'); }
+          catch (err) { toast('复制失败：' + err.message, true); }
+          return;
+        }
+        const id = Number(b.dataset.cdnEdit || b.dataset.cdnCheck || b.dataset.cdnDelete);
+        const record = cdnRecords.find(r => r.id === id);
+        if (!record) return;
+        if (b.dataset.cdnEdit) { editCDN(record); return; }
+        if (b.dataset.cdnDelete && !confirm('删除 CDN 节点「' + record.remark + '」？相关客户端链接将失效。')) return;
+        b.disabled = true;
+        try {
+          await api('/api/cdn', {method:'POST', headers:{'Content-Type':'application/json'},body:JSON.stringify({action:b.dataset.cdnCheck ? 'check' : 'delete',id})});
+          toast(b.dataset.cdnCheck ? '候选检测完成' : 'CDN 节点已删除');
+          await poll();
+        } catch (err) { toast(err.message, true); }
+        finally { b.disabled = false; }
+      });
+      async function downloadCDN(target, filename) {
+        try {
+          const response = await fetch('api/cdn?target=' + encodeURIComponent(target));
+          if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            throw Error(data.error || '导出失败：HTTP ' + response.status);
+          }
+          const a = document.createElement('a');
+          const objectURL = URL.createObjectURL(await response.blob());
+          a.href = objectURL; a.download = filename;
+          document.body.append(a); a.click(); a.remove();
+          setTimeout(() => URL.revokeObjectURL(objectURL), 1000);
+        } catch (err) { toast(err.message, true); }
+      }
+      $('#cdnExportLinks').onclick = () => downloadCDN('links','cdn-nodes.txt');
+      $('#cdnExportBase64').onclick = () => downloadCDN('base64','cdn-nodes-base64.txt');
+      $('#cdnExportMihomo').onclick = () => downloadCDN('mihomo','cdn-mihomo.yaml');
+
       function renderNativeConnections() {
         $("#list").hidden = true; $("#orphans").hidden = true;
         if ($("#hostConnections")) $("#hostConnections").hidden = true;
@@ -1471,7 +1621,7 @@
           $("#newnode").hidden = isXCL();
           $("#exportAll").hidden = isXCL();
           $("#rollbackNative").hidden = !isNative();
-          if (isNative()) renderNativeConnections(); else { renderExits(); renderHostDirect(); renderOrphans(); }
+          if (isNative()) { renderNativeConnections(); await loadCDNRecords(); } else { $('#cdnManagement').hidden = true; renderExits(); renderHostDirect(); renderOrphans(); }
           if (!window.resourceSlotOpened) {
             const requested = Number(
               new URLSearchParams(location.search).get("slot"),

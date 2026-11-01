@@ -23,6 +23,11 @@ func cloneNativeStore(s *nativeStore) *nativeStore {
 	for _, in := range s.Inbounds {
 		ib := *in
 		ib.Clients = append([]nativeClient(nil), in.Clients...)
+		if in.CDN != nil {
+			v := *in.CDN
+			v.Entries = append([]cdnEntry(nil), in.CDN.Entries...)
+			ib.CDN = &v
+		}
 		if in.ThirdParty != nil {
 			p := *in.ThirdParty
 			ib.ThirdParty = &p
